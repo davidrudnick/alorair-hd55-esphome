@@ -1,0 +1,276 @@
+# AlorAir Sentinel HD55 on a LilyGo T-CAN485 (ESPHome).
+#
+# For HD55 units that reply on CAN ID 0x123 at 125 kbps with the newer byte
+# layout (see docs/protocol.md). Check your unit first: others use 50 kbps
+# and/or reply on 0x3B0 with a different layout.
+#
+#   Poll: 0x123 all zeros. Reply on 0x123:
+#     byte 0 = RH %, byte 1 = setpoint %, byte 2 = temp °C, byte 4 = status
+#     (bit 0 power, bit 1 compressor, bit 3 continuous, bit 4 draining?).
+#   Setpoint: 0x123 [N+128, 0...]. Continuous: setpoint 34.
+#   Power: 0x123 [0,0,0x01,0...] is a TOGGLE, so it is only sent when the
+#   reported state differs from the requested one.
+#
+# Copy secrets.yaml.example to secrets.yaml and fill it in before building.
+
+substitutions:
+  poll_interval: 10s
+  link_timeout_ms: "60000"     # no reply for this long => link down, readings unknown
+
+esphome:
+  name: alorair-hd55
+  friendly_name: AlorAir HD55
+  on_boot:
+    - priority: 800
+      then:
+        - output.turn_on: enable_pin       # RS485 enable
+        - output.turn_off: can_se_pin      # CAN transceiver SE -> active
+        - output.turn_on: enable_5v_pin    # board 5V rail
+  platformio_options:
+    board_build.flash_mode: dio
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+logger:
+  level: DEBUG
+
+api:
+  encryption:
+    key: !secret hd55_api_key
+
+ota:
+  - platform: esphome
+    encryption: {}    # reuses the api encryption key
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "HD55 Fallback"
+
+captive_portal:
+
+web_server:
+  port: 80
+  ota: false        # firmware updates only via encrypted ESPHome OTA
+
+globals:
+  - id: last_reply_ms
+    type: uint32_t
+    initial_value: "0"
+
+# --- T-CAN485 hardware enable pins (required!) ---
+output:
+  - platform: gpio
+    id: enable_pin
+    pin: GPIO19
+  - platform: gpio
+    id: can_se_pin
+    pin: GPIO23
+  - platform: gpio
+    id: enable_5v_pin
+    pin: GPIO16
+
+light:
+  - platform: esp32_rmt_led_strip
+    channel_colors: GRB
+    chipset: WS2812
+    pin: GPIO04
+    num_leds: 1
+    name: "Status LED"
+    disabled_by_default: true
+
+# --- CAN bus ---
+canbus:
+  - platform: esp32_can
+    id: hd55_can
+    tx_pin: GPIO27
+    rx_pin: GPIO26
+    can_id: 0x05          # dummy node id required by ESPHome
+    bit_rate: 125kbps
+    use_extended_id: false
+    on_frame:
+      - can_id: 0x123
+        then:
+          - logger.log:
+              format: "0x123: %02x %02x %02x %02x %02x %02x %02x %02x"
+              args: ['x[0]','x[1]','x[2]','x[3]','x[4]','x[5]','x[6]','x[7]']
+          - lambda: |-
+              // Polls and commands also use 0x123. A real reply never has
+              // RH = 0 and never has the command bit (0x80) in byte 0.
+              if (x.size() < 8 || x[0] == 0 || x[0] >= 0x80) return;
+              id(last_reply_ms) = millis();
+              id(humidity_actual).publish_state(x[0]);
+              id(humidity_setpoint).publish_state(x[1]);
+              id(temperature).publish_state(x[2]);
+              const uint8_t status = x[4];
+              const bool cont = status & 0x08;
+              id(power).publish_state(status & 0x01);
+              id(running).publish_state(status & 0x02);
+              id(continuous).publish_state(cont);
+              id(draining).publish_state(status & 0x10);
+              // Keep Target Humidity in step with panel changes (not while
+              // continuous, when the setpoint byte reads 34).
+              if (!cont && x[1] >= 36 && x[1] <= 90 &&
+                  id(target_humidity).state != x[1]) {
+                id(target_humidity).publish_state(x[1]);
+              }
+              if (!id(link_ok).state) id(link_ok).publish_state(true);
+
+# --- Poll the unit, and watch for replies stopping ---
+interval:
+  - interval: ${poll_interval}
+    then:
+      - canbus.send:
+          can_id: 0x123
+          use_extended_id: false
+          data: [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+      - lambda: |-
+          const bool ok = id(last_reply_ms) != 0 &&
+                          millis() - id(last_reply_ms) < ${link_timeout_ms};
+          if (ok == id(link_ok).state && id(link_ok).has_state()) return;
+          id(link_ok).publish_state(ok);
+          if (!ok) {
+            id(humidity_actual).publish_state(NAN);
+            id(humidity_setpoint).publish_state(NAN);
+            id(temperature).publish_state(NAN);
+            // Status flags are unknown too, not their last value.
+            id(power).invalidate_state();
+            id(running).invalidate_state();
+            id(continuous).invalidate_state();
+            id(draining).invalidate_state();
+          }
+
+sensor:
+  - platform: uptime
+    name: Uptime
+    disabled_by_default: true
+  - platform: wifi_signal
+    name: WiFi Signal
+    update_interval: 60s
+    disabled_by_default: true
+
+  - platform: template
+    name: Humidity
+    id: humidity_actual
+    accuracy_decimals: 0
+    unit_of_measurement: "%"
+    device_class: humidity
+    state_class: measurement
+  - platform: template
+    name: Humidity Setpoint
+    id: humidity_setpoint
+    accuracy_decimals: 0
+    unit_of_measurement: "%"
+    device_class: humidity
+    state_class: measurement
+  - platform: template
+    name: Temperature
+    id: temperature
+    accuracy_decimals: 0
+    unit_of_measurement: "°C"
+    device_class: temperature
+    state_class: measurement
+
+binary_sensor:
+  - platform: template
+    name: Dehumidifier Link
+    id: link_ok
+    device_class: connectivity
+    entity_category: diagnostic
+  - platform: template
+    name: Power State
+    id: power
+    device_class: power
+  - platform: template
+    name: Compressor Running
+    id: running
+    device_class: running
+  - platform: template
+    name: Continuous Mode
+    id: continuous
+  - platform: template
+    name: Draining
+    id: draining
+    device_class: running
+    # Unconfirmed: the documented unit has no pump, so bit 4 never set.
+    disabled_by_default: true
+
+number:
+  - platform: template
+    name: Target Humidity
+    id: target_humidity
+    min_value: 36
+    max_value: 90
+    step: 1
+    unit_of_measurement: "%"
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: 38
+    set_action:
+      - if:
+          condition:
+            binary_sensor.is_on: link_ok
+          then:
+            - canbus.send:
+                can_id: 0x123
+                use_extended_id: false
+                data: !lambda 'return std::vector<uint8_t>{(uint8_t) (x + 128), 0, 0, 0, 0, 0, 0, 0};'
+
+switch:
+  # Power is a toggle on the wire. Only send it when the unit is reachable
+  # and reports the opposite state; never on boot.
+  - platform: template
+    name: Power
+    lambda: 'return id(power).state;'
+    restore_mode: DISABLED
+    turn_on_action:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: link_ok
+              - binary_sensor.is_off: power
+          then:
+            - canbus.send:
+                can_id: 0x123
+                use_extended_id: false
+                data: [0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]
+    turn_off_action:
+      - if:
+          condition:
+            and:
+              - binary_sensor.is_on: link_ok
+              - binary_sensor.is_on: power
+          then:
+            - canbus.send:
+                can_id: 0x123
+                use_extended_id: false
+                data: [0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]
+
+  # Continuous = setpoint 34; off = back to Target Humidity. Both absolute.
+  - platform: template
+    name: Continuous
+    lambda: 'return id(continuous).state;'
+    restore_mode: DISABLED
+    turn_on_action:
+      - if:
+          condition:
+            binary_sensor.is_on: link_ok
+          then:
+            - canbus.send:
+                can_id: 0x123
+                use_extended_id: false
+                data: [0xA2, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+    turn_off_action:
+      - if:
+          condition:
+            binary_sensor.is_on: link_ok
+          then:
+            - canbus.send:
+                can_id: 0x123
+                use_extended_id: false
+                data: !lambda 'return std::vector<uint8_t>{(uint8_t) (id(target_humidity).state + 128), 0, 0, 0, 0, 0, 0, 0};'
