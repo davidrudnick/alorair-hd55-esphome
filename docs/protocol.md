@@ -48,10 +48,21 @@ Status byte (byte 4):
 |---|---|---|---|
 | 0 | `0x01` | Power on | yes |
 | 1 | `0x02` | Compressor running | yes |
+| 2 | `0x04` | Defrost | yes (2026-11-23): set for 7 min with the compressor bit clear |
 | 3 | `0x08` | Continuous mode | yes |
 | 4 | `0x10` | Draining (pump) | no: this unit has no pump/purge button and never set it |
 
 There is **no fan bit**: the fan's ~60 s run-on after power-off is invisible.
+
+### Defrost
+
+When the room is cool (seen at 15–16 °C / ~60 °F), the unit runs a timed
+defrost about every 2 hours of compressor running: status goes `03` → `05`
+(compressor off, bit 2 on) for **exactly 7 minutes**, then back to `03`. The
+reported RH climbs during defrost (39 → 53 % in the logged cycle, peaking
+just as it ends) and takes 15–20 minutes to recover. That is meltwater
+evaporating near the unit's sensor, not the room getting wetter. Bytes 3 and
+5–7 stay 0 throughout.
 
 Because polls, commands and replies all use ID 0x123, a decoder must ignore
 its own traffic. The ESPHome config skips frames where byte 0 is 0 (a poll)
@@ -121,8 +132,8 @@ log *every* ID, not only the one your config expects.
 
 ## Open questions
 
-- Bytes 3, 5, 6, 7 have always been 0. Error codes or defrost are plausible;
-  the ESPHome config logs every reply so a change would show up.
+- Bytes 3, 5, 6, 7 have always been 0, including during defrost. Error
+  codes are plausible; the Reply Flags sensor records any change.
 - The compressor LED was green during one restart delay and red during
   another. Meaning unknown.
 - What the short press of the power button is for.

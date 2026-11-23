@@ -20,7 +20,8 @@ against the front panel. See [docs/protocol.md](docs/protocol.md).
 | Humidity | sensor | % RH from the unit's own sensor |
 | Humidity Setpoint | sensor | 34 while continuous mode is on |
 | Temperature | sensor | °C from the unit |
-| Power State, Compressor Running, Continuous Mode | binary_sensor | from the status byte |
+| Power State, Compressor Running, Defrosting, Continuous Mode | binary_sensor | from the status byte |
+| Reply Flags | text_sensor (diagnostic) | raw bytes 3–7 in hex, published on change, to catch undecoded bits |
 | Dehumidifier Link | binary_sensor (diagnostic) | off after 60 s without a reply; readings and status then go *unknown* instead of freezing |
 | Target Humidity | number | sets the setpoint; follows changes made on the panel |
 | Power | switch | the CAN command is a **toggle**, so it is only sent when the unit reports the opposite state, and never at boot |
@@ -34,7 +35,7 @@ against the front panel. See [docs/protocol.md](docs/protocol.md).
 | Bit rate | 125 kbps, standard 11-bit IDs |
 | Poll | `123#0000000000000000` |
 | Reply (ID 0x123) | byte 0 RH %, byte 1 setpoint %, byte 2 temp °C, byte 4 status |
-| Status bits | 0 power, 1 compressor, 3 continuous, (4 draining, unconfirmed) |
+| Status bits | 0 power, 1 compressor, 2 defrost, 3 continuous, (4 draining, unconfirmed) |
 | Setpoint | `123#<N+128>00000000000000`, absolute |
 | Continuous | on = setpoint 34; off = setpoint back to your target |
 | Power | `123#0000010000000000`, **toggle** |

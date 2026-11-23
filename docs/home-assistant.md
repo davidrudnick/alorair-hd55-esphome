@@ -68,7 +68,9 @@ cards:
   Wi-Fi, so trigger on "not on").
 - **Not keeping up:** humidity above setpoint + 10 for 6 hours while Power is
   on → notify (frozen coil, failed compressor, door left open). Use a long
-  duration: RH jumps several percent every time the compressor stops.
+  duration: RH jumps several percent every time the compressor stops, and
+  up to ~15 % during each 7-minute defrost. Add a condition that
+  `binary_sensor.alorair_hd55_defrosting` has been off for 20 minutes.
 - **Unexpectedly off:** Power State off for 30 minutes when you expect it on.
 
 ## Troubleshooting
@@ -80,3 +82,4 @@ cards:
 | Power/Continuous switches still show a state while the link is off | ESPHome switches have no "unknown" state. They can't send anything until replies resume; trust the Link sensor |
 | Setpoint reads 34 | Continuous mode is on (that's how the unit encodes it) |
 | Humidity rises right after the unit stops | Normal: the fan runs ~60 s after the compressor stops and re-evaporates water from the coil |
+| RH spikes ~10–15 % every ~2 h in a cool room | Defrost: **Defrosting** is on for 7 min, compressor off. RH recovers 15–20 min later |

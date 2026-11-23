@@ -6,7 +6,8 @@
 #
 #   Poll: 0x123 all zeros. Reply on 0x123:
 #     byte 0 = RH %, byte 1 = setpoint %, byte 2 = temp °C, byte 4 = status
-#     (bit 0 power, bit 1 compressor, bit 3 continuous, bit 4 draining?).
+#     (bit 0 power, bit 1 compressor, bit 2 defrost, bit 3 continuous,
+#     bit 4 draining?).
 #   Setpoint: 0x123 [N+128, 0...]. Continuous: setpoint 34.
 #   Power: 0x123 [0,0,0x01,0...] is a TOGGLE, so it is only sent when the
 #   reported state differs from the requested one.
@@ -110,6 +111,7 @@ canbus:
               const bool cont = status & 0x08;
               id(power).publish_state(status & 0x01);
               id(running).publish_state(status & 0x02);
+              id(defrosting).publish_state(status & 0x04);
               id(continuous).publish_state(cont);
               id(draining).publish_state(status & 0x10);
               // Keep Target Humidity in step with panel changes (not while
@@ -119,6 +121,12 @@ canbus:
                 id(target_humidity).publish_state(x[1]);
               }
               if (!id(link_ok).state) id(link_ok).publish_state(true);
+              // Bytes 3-7 (status + undecoded) as hex, only on change, so HA
+              // history keeps a record of anything new.
+              char flags[16];
+              snprintf(flags, sizeof(flags), "%02x %02x %02x %02x %02x",
+                       x[3], x[4], x[5], x[6], x[7]);
+              if (id(reply_flags).state != flags) id(reply_flags).publish_state(flags);
 
 # --- Poll the unit, and watch for replies stopping ---
 interval:
@@ -140,6 +148,7 @@ interval:
             // Status flags are unknown too, not their last value.
             id(power).invalidate_state();
             id(running).invalidate_state();
+            id(defrosting).invalidate_state();
             id(continuous).invalidate_state();
             id(draining).invalidate_state();
           }
@@ -190,6 +199,12 @@ binary_sensor:
     id: running
     device_class: running
   - platform: template
+    name: Defrosting
+    id: defrosting
+    icon: mdi:snowflake-melt
+    # Timed defrost: ~7 min, compressor off. RH reads high during and
+    # just after it (meltwater at the sensor).
+  - platform: template
     name: Continuous Mode
     id: continuous
   - platform: template
@@ -198,6 +213,13 @@ binary_sensor:
     device_class: running
     # Unconfirmed: the documented unit has no pump, so bit 4 never set.
     disabled_by_default: true
+
+text_sensor:
+  - platform: template
+    name: Reply Flags
+    id: reply_flags
+    icon: mdi:code-brackets
+    entity_category: diagnostic
 
 number:
   - platform: template
