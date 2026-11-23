@@ -57,12 +57,24 @@ There is **no fan bit**: the fan's ~60 s run-on after power-off is invisible.
 ### Defrost
 
 When the room is cool (seen at 15–16 °C / ~60 °F), the unit runs a timed
-defrost about every 2 hours of compressor running: status goes `03` → `05`
-(compressor off, bit 2 on) for **exactly 7 minutes**, then back to `03`. The
-reported RH climbs during defrost (39 → 53 % in the logged cycle, peaking
-just as it ends) and takes 15–20 minutes to recover. That is meltwater
-evaporating near the unit's sensor, not the room getting wetter. Bytes 3 and
-5–7 stay 0 throughout.
+defrost: status goes `03` → `05` (compressor off, bit 2 on) for **exactly
+7 minutes**, then back to `03`. Bytes 3 and 5–7 stay 0 throughout.
+
+Six cycles observed on 2026-11-23, with the compressor running nonstop
+(setpoint below what the room reached):
+
+| | |
+|---|---|
+| Defrost length | 7:00 every time |
+| Start-to-start interval | ~1 h 55 min – 2 h 06 min overnight, ~1 h 45 min by midday |
+| Compressor run between defrosts | ~1 h 38 min (midday cycles) |
+| Reported RH | 38 → 52–53 %, peaking as defrost ends |
+| Recovery | back within ~3 % of baseline 16–21 min after defrost ends |
+| Room temperature change | ≤ 1 °C |
+
+The RH rise is meltwater evaporating near the unit's sensor, not the room
+getting wetter. What triggers defrost (run time, coil temperature, or both)
+isn't known.
 
 Because polls, commands and replies all use ID 0x123, a decoder must ignore
 its own traffic. The ESPHome config skips frames where byte 0 is 0 (a poll)
